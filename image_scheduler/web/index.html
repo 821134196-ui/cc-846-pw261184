@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>镜像拉取调度模拟器</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="viz-root" id="app">
+  <header class="topbar">
+    <div class="title-block">
+      <h1>镜像拉取调度模拟器</h1>
+      <p class="subtitle" id="scenario-desc">加载中…</p>
+    </div>
+    <div class="clock">
+      <span class="clock-label">仿真时刻</span>
+      <span class="clock-value" id="clock">T0</span>
+      <span class="clock-chip" id="reg-chip">仓库 100%</span>
+    </div>
+  </header>
+
+  <!-- 控制行：过滤器/控件统一放在内容上方一行 -->
+  <section class="controls" aria-label="仿真控制">
+    <label class="control">
+      场景
+      <select id="scenario-select"></select>
+    </label>
+    <div class="btn-group" role="group">
+      <button id="btn-play" class="btn">⏸ 暂停</button>
+      <button id="btn-tick" class="btn">单步</button>
+      <button id="btn-reset" class="btn">↺ 重置</button>
+    </div>
+    <label class="control">
+      速度
+      <select id="speed-select">
+        <option value="1.6">0.6×</option>
+        <option value="0.8" selected>1×</option>
+        <option value="0.4">2×</option>
+        <option value="0.2">4×</option>
+      </select>
+    </label>
+    <div class="control-group">
+      <span class="control-label">仓库速率注入</span>
+      <div class="btn-group">
+        <button class="btn btn-warn" data-factor="0.5">降速 50%</button>
+        <button class="btn btn-critical" data-factor="0.25">降速 25%</button>
+        <button class="btn btn-good" data-factor="1">恢复满速</button>
+      </div>
+    </div>
+    <div class="control-group">
+      <span class="control-label">动态加单</span>
+      <select id="job-node"></select>
+      <select id="job-image"></select>
+      <input id="job-deadline" type="number" value="12" min="1" max="120"
+             aria-label="交付时限（tick）">
+      <button id="btn-add-job" class="btn">提交拉取</button>
+    </div>
+    <button id="btn-theme" class="btn btn-ghost" aria-label="切换主题">◐</button>
+  </section>
+
+  <!-- KPI 行 -->
+  <section class="kpi-row" aria-label="关键指标">
+    <div class="stat-tile">
+      <div class="stat-label">作业完成</div>
+      <div class="stat-value" id="kpi-jobs">0/0</div>
+      <div class="stat-delta" id="kpi-late"></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">仓库出口流量</div>
+      <div class="stat-value" id="kpi-registry">0 MB</div>
+      <div class="stat-delta good" id="kpi-saved"></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">P2P 分发流量</div>
+      <div class="stat-value" id="kpi-peer">0 MB</div>
+      <div class="stat-delta" id="kpi-peer-sub"></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">本地层命中</div>
+      <div class="stat-value" id="kpi-hits">0</div>
+      <div class="stat-delta">零传输字节</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">在途 / 排队</div>
+      <div class="stat-value" id="kpi-flow">0 / 0</div>
+      <div class="stat-delta" id="kpi-flow-sub"></div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">回源去重校验</div>
+      <div class="stat-value" id="kpi-check">—</div>
+      <div class="stat-delta" id="kpi-check-sub">每层 ≤1 次仓库回源</div>
+    </div>
+  </section>
+
+  <!-- 实时校验卡 -->
+  <section class="card verify-card" id="verify-card" aria-live="polite">
+    <h2>共享层"只传一次"实时校验</h2>
+    <div class="verify-list" id="verify-list"></div>
+  </section>
+
+  <div class="grid-2">
+    <!-- 层命中表 -->
+    <section class="card">
+      <h2>层命中与来源审计 <span class="hint">悬停查看持有节点</span></h2>
+      <div class="table-wrap">
+        <table id="layer-table">
+          <thead>
+            <tr>
+              <th>层</th><th>大小</th>
+              <th>仓库回源</th><th>同架 P2P</th><th>跨架 P2P</th>
+              <th>本地命中</th><th>扇出</th>
+              <th>回源/无去重流量</th><th>校验</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 链路利用率 -->
+    <section class="card">
+      <h2>链路利用率 <span class="hint">MB/s，随时间变化</span></h2>
+      <div class="util-charts" id="util-charts"></div>
+      <table class="data-table" id="util-table">
+        <thead><tr><th>链路</th><th class="num">当前 MB/s</th>
+        <th class="num">容量 MB/s</th><th class="num">利用率</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="legend">
+        <span class="legend-item"><i class="key key-reg"></i>仓库出口</span>
+        <span class="legend-item"><i class="key key-up"></i>机架上联</span>
+        <span class="legend-item"><i class="key key-lan"></i>机架内 LAN</span>
+        <span class="legend-item"><i class="key key-cap"></i>容量上限</span>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <!-- 作业与任务 -->
+    <section class="card">
+      <h2>拉取作业与层任务 <span class="hint">按 EDF 截止期排序</span></h2>
+      <div class="jobs" id="jobs"></div>
+    </section>
+
+    <!-- 队列 + 事件 -->
+    <section class="card">
+      <h2>调度队列与事件流</h2>
+      <div class="queue-wrap">
+        <h3>待调度队列（含等待种子）</h3>
+        <div class="queue" id="queue"></div>
+      </div>
+      <div class="events-wrap">
+        <h3>事件流</h3>
+        <div class="events" id="events" role="log" aria-live="off"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 节点缓存视图 -->
+  <section class="card">
+    <h2>节点缓存与机架拓扑 <span class="hint">色块=已缓存层；悬停查看详情</span></h2>
+    <div class="topology" id="topology"></div>
+  </section>
+
+  <footer class="footer">
+    离散时间步进仿真（1 tick = 1 s）· 调度策略：EDF 截止期优先 + 同层回源全局去重 + 同机架种子优先 ·
+    <a href="#" id="table-toggle">显示数据表视图</a>
+  </footer>
+</div>
+
+<div id="tooltip" class="tooltip" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
